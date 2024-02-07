@@ -230,6 +230,8 @@ renderCUDA(
   const uint32_t* __restrict__ point_list,
   const int W, 
   const int H,
+  const int D,
+  const int M,
   const int ED,
   const int TR,
   const float2* __restrict__ points_xy_image,
@@ -285,7 +287,7 @@ renderCUDA(
   uint32_t contributor = 0;
   uint32_t last_contributor = 0;
   float C[3] = { 0 };
-  float D = 0;
+  float Dp = 0;
   float N[3] = {0};
   float E[MAX_EXTRA_DIMS] = {0};
   // We assure the extra feature dim ED <= 8
@@ -363,13 +365,13 @@ renderCUDA(
       else
         uv = {uv.x / denom, uv.y / denom, uv.z / denom};
       
-      float3 color = cube_texture_fetch(uv, texture, TR);
+      float3 color = cube_texture_fetch(uv, texture, pix_dir, TR, D, M);
 
       // Eq. (3) from 3D Gaussian splatting paper.
       C[0] += color.x * alpha * T;
       C[1] += color.y * alpha * T;
       C[2] += color.z * alpha * T;
-      D += depths[g_idx] * alpha * T;
+      Dp += depths[g_idx] * alpha * T;
       for (int ch = 0; ch < 3; ch++)
         N[ch] += norms[g_idx * 3 + ch] * alpha * T;
       for(int ch = 0; ch < ED; ch++)
@@ -390,7 +392,7 @@ renderCUDA(
     n_contrib[pix_id] = last_contributor;
     for (int ch = 0; ch < 3; ch++)
       out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
-    out_depth[pix_id] = D;
+    out_depth[pix_id] = Dp;
     // float len = sqrt(N[0]*N[0] + N[1]*N[1] + N[2]*N[2]) + 1e-6;
     for (int ch = 0; ch < 3; ch++)
       out_norm[ch * H * W + pix_id] = N[ch];
@@ -406,6 +408,8 @@ void FORWARD::render(
   const uint32_t* point_list,
   const int W,
   const int H,
+  const int D,
+  const int M,
   const int ED,
   const int TR,
   const float2* means2D,
@@ -433,7 +437,7 @@ void FORWARD::render(
   renderCUDA << <grid, block >> > (
     ranges,
     point_list,
-    W, H, ED, TR,
+    W, H, D, M, ED, TR,
     means2D,
     means3D,
     norms,

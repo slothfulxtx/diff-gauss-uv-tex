@@ -312,12 +312,12 @@ static __device__ __forceinline__ float2 indexTextureLinear(float3 uv, int4& tcO
   return make_float2(u, v);
 }
 
-static __device__ __forceinline__ void fetchQuad(float& a00, float& a10, float& a01, float& a11, const float* pIn, int4 tc, bool corner)
+static __device__ __forceinline__ void fetchQuad(glm::vec3& a00, glm::vec3& a10, glm::vec3& a01, glm::vec3& a11, const glm::vec3* pIn, int4 tc, bool corner)
 {
   // For invalid cube map uv, tc will be all negative, and all texel values will be zero.
   if (corner)
   {
-    float avg = 0.0;
+    glm::vec3 avg = {0, 0, 0};
     if (tc.x >= 0) avg += (a00 = pIn[tc.x]);
     if (tc.y >= 0) avg += (a10 = pIn[tc.y]);
     if (tc.z >= 0) avg += (a01 = pIn[tc.z]);
@@ -330,31 +330,66 @@ static __device__ __forceinline__ void fetchQuad(float& a00, float& a10, float& 
   }
   else
   {
-    a00 = (tc.x >= 0) ? pIn[tc.x] : 0.0;
-    a10 = (tc.y >= 0) ? pIn[tc.y] : 0.0;
-    a01 = (tc.z >= 0) ? pIn[tc.z] : 0.0;
-    a11 = (tc.w >= 0) ? pIn[tc.w] : 0.0;
+    a00 = (tc.x >= 0) ? pIn[tc.x] : glm::vec3(0, 0, 0);
+    a10 = (tc.y >= 0) ? pIn[tc.y] : glm::vec3(0, 0, 0);
+    a01 = (tc.z >= 0) ? pIn[tc.z] : glm::vec3(0, 0, 0);
+    a11 = (tc.w >= 0) ? pIn[tc.w] : glm::vec3(0, 0, 0);
   }
 }
 template<class T> static __device__ __forceinline__ T lerp  (const T& a, const T& b, float c) { return a + c * (b - a); }
 template<class T> static __device__ __forceinline__ T bilerp(const T& a, const T& b, const T& c, const T& d, const float2& e) { return lerp(lerp(a, b, e.x), lerp(c, d, e.x), e.y); }
 
-__forceinline__ __device__ float3 cube_texture_fetch(const float3& uv, const float* texture, const int TR)
+__forceinline__ __device__ float3 cube_texture_fetch(const float3& uv, const float* texture, const float3 &dir, const int TR, const int D, const int M)
 {
   int4 tc0 = {0, 0, 0, 0};
   float2 uv0 = indexTextureLinear(uv, tc0, TR);
   bool corner0 = ((tc0.x | tc0.y | tc0.z | tc0.w) < 0);
-  tc0 = {tc0.x * 3, tc0.y * 3, tc0.z * 3, tc0.w * 3};
+  tc0 = {tc0.x * M * M, tc0.y * M * M, tc0.z * M * M, tc0.w * M * M};
 
-  float pOut[3];
+  glm::vec3 sh[16];
   // Interpolate.
-  for (int i=0; i < 3; i++)
+  for (int i=0; i < (D+1)*(D+1); i++)
   {
-    float a00, a10, a01, a11;
-    fetchQuad(a00, a10, a01, a11, texture, {tc0.x+i, tc0.y+i, tc0.z+i, tc0.w+i}, corner0);
-    pOut[i] = bilerp(a00, a10, a01, a11, uv0);
+    glm::vec3 a00, a10, a01, a11;
+    fetchQuad(a00, a10, a01, a11, (glm::vec3*)texture, {tc0.x+i, tc0.y+i, tc0.z+i, tc0.w+i}, corner0);
+    sh[i] = bilerp(a00, a10, a01, a11, uv0);
   }
-  return {pOut[0], pOut[1], pOut[2]}; // Exit.
+  glm::vec3 result = SH_C0 * sh[0];
+
+  if (D > 0)
+  {
+    float x = dir.x;
+    float y = dir.y;
+    float z = dir.z;
+    result = result - SH_C1 * y * sh[1] + SH_C1 * z * sh[2] - SH_C1 * x * sh[3];
+
+    if (D > 1)
+    {
+      float xx = x * x, yy = y * y, zz = z * z;
+      float xy = x * y, yz = y * z, xz = x * z;
+      result = result +
+        SH_C2[0] * xy * sh[4] +
+        SH_C2[1] * yz * sh[5] +
+        SH_C2[2] * (2.0f * zz - xx - yy) * sh[6] +
+        SH_C2[3] * xz * sh[7] +
+        SH_C2[4] * (xx - yy) * sh[8];
+
+      if (D > 2)
+      {
+        result = result +
+          SH_C3[0] * y * (3.0f * xx - yy) * sh[9] +
+          SH_C3[1] * xy * z * sh[10] +
+          SH_C3[2] * y * (4.0f * zz - xx - yy) * sh[11] +
+          SH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * sh[12] +
+          SH_C3[4] * x * (4.0f * zz - xx - yy) * sh[13] +
+          SH_C3[5] * z * (xx - yy) * sh[14] +
+          SH_C3[6] * x * (xx - 3.0f * yy) * sh[15];
+      }
+    }
+  }
+  result += 0.5f;
+  
+  return {max(result.x, 0.0f), max(result.y, 0.0f), max(result.z, 0.0f)}; // Exit.
 }
 
 #define CHECK_CUDA(A, debug) \

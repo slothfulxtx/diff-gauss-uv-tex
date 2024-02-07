@@ -15,129 +15,6 @@
 #include <cooperative_groups/reduce.h>
 namespace cg = cooperative_groups;
 
-// Backward pass for conversion of spherical harmonics to RGB for
-// each Gaussian.
-__device__ void computeColorFromSH(int idx, int deg, int max_coeffs, const glm::vec3* means, glm::vec3 campos, const float* shs, const bool* clamped, const glm::vec3* dL_dcolor, glm::vec3* dL_dmeans, glm::vec3* dL_dshs)
-{
-  // Compute intermediate values, as it is done during forward
-  glm::vec3 pos = means[idx];
-  glm::vec3 dir_orig = pos - campos;
-  glm::vec3 dir = dir_orig / glm::length(dir_orig);
-
-  glm::vec3* sh = ((glm::vec3*)shs) + idx * max_coeffs;
-
-  // Use PyTorch rule for clamping: if clamping was applied,
-  // gradient becomes 0.
-  glm::vec3 dL_dRGB = dL_dcolor[idx];
-  dL_dRGB.x *= clamped[3 * idx + 0] ? 0 : 1;
-  dL_dRGB.y *= clamped[3 * idx + 1] ? 0 : 1;
-  dL_dRGB.z *= clamped[3 * idx + 2] ? 0 : 1;
-
-  glm::vec3 dRGBdx(0, 0, 0);
-  glm::vec3 dRGBdy(0, 0, 0);
-  glm::vec3 dRGBdz(0, 0, 0);
-  float x = dir.x;
-  float y = dir.y;
-  float z = dir.z;
-
-  // Target location for this Gaussian to write SH gradients to
-  glm::vec3* dL_dsh = dL_dshs + idx * max_coeffs;
-
-  // No tricks here, just high school-level calculus.
-  float dRGBdsh0 = SH_C0;
-  dL_dsh[0] = dRGBdsh0 * dL_dRGB;
-  if (deg > 0)
-  {
-    float dRGBdsh1 = -SH_C1 * y;
-    float dRGBdsh2 = SH_C1 * z;
-    float dRGBdsh3 = -SH_C1 * x;
-    dL_dsh[1] = dRGBdsh1 * dL_dRGB;
-    dL_dsh[2] = dRGBdsh2 * dL_dRGB;
-    dL_dsh[3] = dRGBdsh3 * dL_dRGB;
-
-    dRGBdx = -SH_C1 * sh[3];
-    dRGBdy = -SH_C1 * sh[1];
-    dRGBdz = SH_C1 * sh[2];
-
-    if (deg > 1)
-    {
-      float xx = x * x, yy = y * y, zz = z * z;
-      float xy = x * y, yz = y * z, xz = x * z;
-
-      float dRGBdsh4 = SH_C2[0] * xy;
-      float dRGBdsh5 = SH_C2[1] * yz;
-      float dRGBdsh6 = SH_C2[2] * (2.f * zz - xx - yy);
-      float dRGBdsh7 = SH_C2[3] * xz;
-      float dRGBdsh8 = SH_C2[4] * (xx - yy);
-      dL_dsh[4] = dRGBdsh4 * dL_dRGB;
-      dL_dsh[5] = dRGBdsh5 * dL_dRGB;
-      dL_dsh[6] = dRGBdsh6 * dL_dRGB;
-      dL_dsh[7] = dRGBdsh7 * dL_dRGB;
-      dL_dsh[8] = dRGBdsh8 * dL_dRGB;
-
-      dRGBdx += SH_C2[0] * y * sh[4] + SH_C2[2] * 2.f * -x * sh[6] + SH_C2[3] * z * sh[7] + SH_C2[4] * 2.f * x * sh[8];
-      dRGBdy += SH_C2[0] * x * sh[4] + SH_C2[1] * z * sh[5] + SH_C2[2] * 2.f * -y * sh[6] + SH_C2[4] * 2.f * -y * sh[8];
-      dRGBdz += SH_C2[1] * y * sh[5] + SH_C2[2] * 2.f * 2.f * z * sh[6] + SH_C2[3] * x * sh[7];
-
-      if (deg > 2)
-      {
-        float dRGBdsh9 = SH_C3[0] * y * (3.f * xx - yy);
-        float dRGBdsh10 = SH_C3[1] * xy * z;
-        float dRGBdsh11 = SH_C3[2] * y * (4.f * zz - xx - yy);
-        float dRGBdsh12 = SH_C3[3] * z * (2.f * zz - 3.f * xx - 3.f * yy);
-        float dRGBdsh13 = SH_C3[4] * x * (4.f * zz - xx - yy);
-        float dRGBdsh14 = SH_C3[5] * z * (xx - yy);
-        float dRGBdsh15 = SH_C3[6] * x * (xx - 3.f * yy);
-        dL_dsh[9] = dRGBdsh9 * dL_dRGB;
-        dL_dsh[10] = dRGBdsh10 * dL_dRGB;
-        dL_dsh[11] = dRGBdsh11 * dL_dRGB;
-        dL_dsh[12] = dRGBdsh12 * dL_dRGB;
-        dL_dsh[13] = dRGBdsh13 * dL_dRGB;
-        dL_dsh[14] = dRGBdsh14 * dL_dRGB;
-        dL_dsh[15] = dRGBdsh15 * dL_dRGB;
-
-        dRGBdx += (
-          SH_C3[0] * sh[9] * 3.f * 2.f * xy +
-          SH_C3[1] * sh[10] * yz +
-          SH_C3[2] * sh[11] * -2.f * xy +
-          SH_C3[3] * sh[12] * -3.f * 2.f * xz +
-          SH_C3[4] * sh[13] * (-3.f * xx + 4.f * zz - yy) +
-          SH_C3[5] * sh[14] * 2.f * xz +
-          SH_C3[6] * sh[15] * 3.f * (xx - yy));
-
-        dRGBdy += (
-          SH_C3[0] * sh[9] * 3.f * (xx - yy) +
-          SH_C3[1] * sh[10] * xz +
-          SH_C3[2] * sh[11] * (-3.f * yy + 4.f * zz - xx) +
-          SH_C3[3] * sh[12] * -3.f * 2.f * yz +
-          SH_C3[4] * sh[13] * -2.f * xy +
-          SH_C3[5] * sh[14] * -2.f * yz +
-          SH_C3[6] * sh[15] * -3.f * 2.f * xy);
-
-        dRGBdz += (
-          SH_C3[1] * sh[10] * xy +
-          SH_C3[2] * sh[11] * 4.f * 2.f * yz +
-          SH_C3[3] * sh[12] * 3.f * (2.f * zz - xx - yy) +
-          SH_C3[4] * sh[13] * 4.f * 2.f * xz +
-          SH_C3[5] * sh[14] * (xx - yy));
-      }
-    }
-  }
-
-  // The view direction is an input to the computation. View direction
-  // is influenced by the Gaussian's mean, so SHs gradients
-  // must propagate back into 3D position.
-  glm::vec3 dL_ddir(glm::dot(dRGBdx, dL_dRGB), glm::dot(dRGBdy, dL_dRGB), glm::dot(dRGBdz, dL_dRGB));
-
-  // Account for normalization of direction
-  float3 dL_dmean = dnormvdv(float3{ dir_orig.x, dir_orig.y, dir_orig.z }, float3{ dL_ddir.x, dL_ddir.y, dL_ddir.z });
-
-  // Gradients of loss w.r.t. Gaussian means, but only the portion 
-  // that is caused because the mean affects the view-dependent color.
-  // Additional mean gradient is accumulated in below methods.
-  dL_dmeans[idx] += glm::vec3(dL_dmean.x, dL_dmean.y, dL_dmean.z);
-}
-
 // Backward version of INVERSE 2D covariance matrix computation
 // (due to length launched as separate kernel before other 
 // backward steps contained in preprocess)
@@ -489,32 +366,121 @@ static __device__ __forceinline__ float3 indexCubeMapGrad(float3 uv, float gu, f
     return res;
 }
 
-static __device__ __forceinline__ void accumQuad(float4 c, float* pOut, int4 tc, bool corner)
+static __device__ __forceinline__ void accumQuad(float4 c, glm::vec3 dL_dsh, float* pOut, int4 tc, bool corner)
 {
     // For invalid cube map uv, tc will be all negative, and no accumulation will take place.
     if (corner)
     {
-        float cb;
-        if (tc.x < 0) cb = c.x;
-        if (tc.y < 0) cb = c.y;
-        if (tc.z < 0) cb = c.z;
-        if (tc.w < 0) cb = c.w;
+        glm::vec3 cb;
+        if (tc.x < 0) cb = c.x * dL_dsh;
+        if (tc.y < 0) cb = c.y * dL_dsh;
+        if (tc.z < 0) cb = c.z * dL_dsh;
+        if (tc.w < 0) cb = c.w * dL_dsh;
         cb *= 0.33333333f;
-        if (tc.x >= 0) atomicAdd(&(pOut[tc.x]), c.x + cb); 
-        if (tc.y >= 0) atomicAdd(&(pOut[tc.y]), c.y + cb);
-        if (tc.z >= 0) atomicAdd(&(pOut[tc.z]), c.z + cb); 
-        if (tc.w >= 0) atomicAdd(&(pOut[tc.w]), c.w + cb); 
+        if (tc.x >= 0) {
+          atomicAdd(&(pOut[tc.x * 3 + 0]), c.x * dL_dsh.x + cb.x);
+          atomicAdd(&(pOut[tc.x * 3 + 1]), c.x * dL_dsh.y + cb.y);
+          atomicAdd(&(pOut[tc.x * 3 + 2]), c.x * dL_dsh.z + cb.z); 
+        }
+        if (tc.y >= 0) {
+          atomicAdd(&(pOut[tc.y * 3 + 0]), c.y * dL_dsh.x + cb.x);
+          atomicAdd(&(pOut[tc.y * 3 + 1]), c.y * dL_dsh.y + cb.y);
+          atomicAdd(&(pOut[tc.y * 3 + 2]), c.y * dL_dsh.z + cb.z); 
+        }
+        if (tc.z >= 0) {
+          atomicAdd(&(pOut[tc.z * 3 + 0]), c.z * dL_dsh.x + cb.x);
+          atomicAdd(&(pOut[tc.z * 3 + 1]), c.z * dL_dsh.y + cb.y);
+          atomicAdd(&(pOut[tc.z * 3 + 2]), c.z * dL_dsh.z + cb.z); 
+        }
+        if (tc.w >= 0) {
+          atomicAdd(&(pOut[tc.w * 3 + 0]), c.w * dL_dsh.x + cb.x);
+          atomicAdd(&(pOut[tc.w * 3 + 1]), c.w * dL_dsh.y + cb.y);
+          atomicAdd(&(pOut[tc.w * 3 + 2]), c.w * dL_dsh.z + cb.z); 
+        } 
     }
     else
     {
-        if (tc.x >= 0) atomicAdd(&(pOut[tc.x]), c.x); 
-        if (tc.y >= 0) atomicAdd(&(pOut[tc.y]), c.y); 
-        if (tc.z >= 0) atomicAdd(&(pOut[tc.z]), c.z); 
-        if (tc.w >= 0) atomicAdd(&(pOut[tc.w]), c.w); 
+        if (tc.x >= 0) {
+          atomicAdd(&(pOut[tc.x * 3 + 0]), c.x * dL_dsh.x);
+          atomicAdd(&(pOut[tc.x * 3 + 1]), c.x * dL_dsh.y);
+          atomicAdd(&(pOut[tc.x * 3 + 2]), c.x * dL_dsh.z); 
+        } 
+        if (tc.y >= 0) {
+          atomicAdd(&(pOut[tc.y * 3 + 0]), c.y * dL_dsh.x);
+          atomicAdd(&(pOut[tc.y * 3 + 1]), c.y * dL_dsh.y);
+          atomicAdd(&(pOut[tc.y * 3 + 2]), c.y * dL_dsh.z); 
+        }
+        if (tc.z >= 0) {
+          atomicAdd(&(pOut[tc.z * 3 + 0]), c.z * dL_dsh.x);
+          atomicAdd(&(pOut[tc.z * 3 + 1]), c.z * dL_dsh.y);
+          atomicAdd(&(pOut[tc.z * 3 + 2]), c.z * dL_dsh.z); 
+        } 
+        if (tc.w >= 0)  {
+          atomicAdd(&(pOut[tc.w * 3 + 0]), c.w * dL_dsh.x);
+          atomicAdd(&(pOut[tc.w * 3 + 1]), c.w * dL_dsh.y);
+          atomicAdd(&(pOut[tc.w * 3 + 2]), c.w * dL_dsh.z); 
+        }
     }
 }
 
-__forceinline__ __device__ void cube_texture_fetch_backward(const float3& uv, const float* texture, const int TR, const float3 grad_color, float3& grad_uv, float* grad_tex)
+
+__forceinline__ __device__ float3 cube_texture_fetch_forward(const float3& uv, const float* texture, const float3 &dir, const int TR, const int D, const int M, int3 &clamped)
+{
+  int4 tc0 = {0, 0, 0, 0};
+  float2 uv0 = indexTextureLinear(uv, tc0, TR);
+  bool corner0 = ((tc0.x | tc0.y | tc0.z | tc0.w) < 0);
+  tc0 = {tc0.x * M * M, tc0.y * M * M, tc0.z * M * M, tc0.w * M * M};
+
+  glm::vec3 sh[16];
+  // Interpolate.
+  for (int i=0; i < (D+1)*(D+1); i++)
+  {
+    glm::vec3 a00, a10, a01, a11;
+    fetchQuad(a00, a10, a01, a11, (glm::vec3*)texture, {tc0.x+i, tc0.y+i, tc0.z+i, tc0.w+i}, corner0);
+    sh[i] = bilerp(a00, a10, a01, a11, uv0);
+  }
+  glm::vec3 result = SH_C0 * sh[0];
+
+  if (D > 0)
+  {
+    float x = dir.x;
+    float y = dir.y;
+    float z = dir.z;
+    result = result - SH_C1 * y * sh[1] + SH_C1 * z * sh[2] - SH_C1 * x * sh[3];
+
+    if (D > 1)
+    {
+      float xx = x * x, yy = y * y, zz = z * z;
+      float xy = x * y, yz = y * z, xz = x * z;
+      result = result +
+        SH_C2[0] * xy * sh[4] +
+        SH_C2[1] * yz * sh[5] +
+        SH_C2[2] * (2.0f * zz - xx - yy) * sh[6] +
+        SH_C2[3] * xz * sh[7] +
+        SH_C2[4] * (xx - yy) * sh[8];
+
+      if (D > 2)
+      {
+        result = result +
+          SH_C3[0] * y * (3.0f * xx - yy) * sh[9] +
+          SH_C3[1] * xy * z * sh[10] +
+          SH_C3[2] * y * (4.0f * zz - xx - yy) * sh[11] +
+          SH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * sh[12] +
+          SH_C3[4] * x * (4.0f * zz - xx - yy) * sh[13] +
+          SH_C3[5] * z * (xx - yy) * sh[14] +
+          SH_C3[6] * x * (xx - 3.0f * yy) * sh[15];
+      }
+    }
+  }
+  result += 0.5f;
+  clamped = make_int3(result.x < 0.0f, result.y < 0.0f, result.z < 0.0f);
+  // RGB colors are clamped to positive values. If values are
+  // clamped, we need to keep track of this for the backward pass.
+  
+  return {max(result.x, 0.0f), max(result.y, 0.0f), max(result.z, 0.0f)}; // Exit.
+}
+
+__forceinline__ __device__ void cube_texture_fetch_backward(const float3& uv, const float* texture, const float3 dir, const int TR, const int D, const int M, int3 &clamped, float3 grad_color, float3& grad_uv, float* grad_tex)
 {
   // UV gradient accumulators.
   float gu = 0.f;
@@ -523,7 +489,7 @@ __forceinline__ __device__ void cube_texture_fetch_backward(const float3& uv, co
   int4 tc0 = {0, 0, 0, 0};
   float2 uv0 = indexTextureLinear(uv, tc0, TR);
   bool corner0 = ((tc0.x | tc0.y | tc0.z | tc0.w) < 0);
-  tc0 = {tc0.x * 3, tc0.y * 3, tc0.z * 3, tc0.w * 3};  
+  tc0 = {tc0.x * M * M, tc0.y * M * M, tc0.z * M * M, tc0.w * M * M};  
   // Texel weights.
   float uv011 = uv0.x * uv0.y;
   float uv010 = uv0.x - uv011;
@@ -531,16 +497,70 @@ __forceinline__ __device__ void cube_texture_fetch_backward(const float3& uv, co
   float uv000 = 1.f - uv0.x - uv001;
   float4 tw0 = make_float4(uv000, uv010, uv001, uv011);
 
-  for (int i=0; i < 3; i++)
-  {
-      float dy = (i==0)?grad_color.x:((i==1)?grad_color.y:grad_color.z);
-      accumQuad({tw0.x * dy, tw0.y * dy, tw0.z * dy, tw0.w * dy}, grad_tex, {tc0.x+i, tc0.y+i, tc0.z+i, tc0.w+i}, corner0);
+  glm::vec3 dL_dRGB = {grad_color.x * (1 - clamped.x), grad_color.y * (1 - clamped.y), grad_color.z * (1 - clamped.z)};
+  glm::vec3 dL_dsh[16];
+  float x = dir.x;
+  float y = dir.y;
+  float z = dir.z;
 
-      float a00, a10, a01, a11;
-      fetchQuad(a00, a10, a01, a11, texture, {tc0.x+i, tc0.y+i, tc0.z+i, tc0.w+i}, corner0);
-      float ad = (a11 + a00 - a10 - a01);
-      gu += dy * ((a10 - a00) + uv0.y * ad) * TR;
-      gv += dy * ((a01 - a00) + uv0.x * ad) * TR;
+  float dRGBdsh0 = SH_C0;
+  dL_dsh[0] = dRGBdsh0 * dL_dRGB;
+  if (D > 0)
+  {
+    float dRGBdsh1 = -SH_C1 * y;
+    float dRGBdsh2 = SH_C1 * z;
+    float dRGBdsh3 = -SH_C1 * x;
+    dL_dsh[1] = dRGBdsh1 * dL_dRGB;
+    dL_dsh[2] = dRGBdsh2 * dL_dRGB;
+    dL_dsh[3] = dRGBdsh3 * dL_dRGB;
+
+    if (D > 1)
+    {
+      float xx = x * x, yy = y * y, zz = z * z;
+      float xy = x * y, yz = y * z, xz = x * z;
+
+      float dRGBdsh4 = SH_C2[0] * xy;
+      float dRGBdsh5 = SH_C2[1] * yz;
+      float dRGBdsh6 = SH_C2[2] * (2.f * zz - xx - yy);
+      float dRGBdsh7 = SH_C2[3] * xz;
+      float dRGBdsh8 = SH_C2[4] * (xx - yy);
+      dL_dsh[4] = dRGBdsh4 * dL_dRGB;
+      dL_dsh[5] = dRGBdsh5 * dL_dRGB;
+      dL_dsh[6] = dRGBdsh6 * dL_dRGB;
+      dL_dsh[7] = dRGBdsh7 * dL_dRGB;
+      dL_dsh[8] = dRGBdsh8 * dL_dRGB;
+
+      if (D > 2)
+      {
+        float dRGBdsh9 = SH_C3[0] * y * (3.f * xx - yy);
+        float dRGBdsh10 = SH_C3[1] * xy * z;
+        float dRGBdsh11 = SH_C3[2] * y * (4.f * zz - xx - yy);
+        float dRGBdsh12 = SH_C3[3] * z * (2.f * zz - 3.f * xx - 3.f * yy);
+        float dRGBdsh13 = SH_C3[4] * x * (4.f * zz - xx - yy);
+        float dRGBdsh14 = SH_C3[5] * z * (xx - yy);
+        float dRGBdsh15 = SH_C3[6] * x * (xx - 3.f * yy);
+        dL_dsh[9] = dRGBdsh9 * dL_dRGB;
+        dL_dsh[10] = dRGBdsh10 * dL_dRGB;
+        dL_dsh[11] = dRGBdsh11 * dL_dRGB;
+        dL_dsh[12] = dRGBdsh12 * dL_dRGB;
+        dL_dsh[13] = dRGBdsh13 * dL_dRGB;
+        dL_dsh[14] = dRGBdsh14 * dL_dRGB;
+        dL_dsh[15] = dRGBdsh15 * dL_dRGB;
+      }
+    }
+  }
+
+  for (int i=0; i < (D+1)*(D+1); i++)
+  {
+      accumQuad(tw0, dL_dsh[i], grad_tex, {tc0.x+i, tc0.y+i, tc0.z+i, tc0.w+i}, corner0);
+      glm::vec3 a00, a10, a01, a11;
+      fetchQuad(a00, a10, a01, a11, (glm::vec3*) texture, {tc0.x+i, tc0.y+i, tc0.z+i, tc0.w+i}, corner0);
+      glm::vec3 ad = (a11 + a00 - a10 - a01);
+      glm::vec3 tmp;
+      tmp = dL_dsh[i] * ((a10 - a00) + uv0.y * ad) * float(TR);
+      gu += tmp.x + tmp.y + tmp.z;
+      tmp = dL_dsh[i] * ((a01 - a00) + uv0.x * ad) * float(TR);
+      gv += tmp.x + tmp.y + tmp.z; 
   }
 
   // Store UV gradients and exit.
@@ -554,6 +574,8 @@ renderCUDA(
   const uint32_t* __restrict__ point_list,
   const int W,
   const int H,
+  const int D, 
+  const int M,
   const int ED,
   const int TR,
   const float* __restrict__ bg_color,
@@ -735,7 +757,8 @@ renderCUDA(
       else
         norm_uv = {uv.x / denom, uv.y / denom, uv.z / denom};
       
-      float3 color = cube_texture_fetch(norm_uv, texture, TR);
+      int3 clamped;
+      float3 color = cube_texture_fetch_forward(norm_uv, texture, pix_dir, TR, D, M, clamped);
       float3 dL_dcolor = {0, 0, 0};
       for (int ch = 0; ch < 3; ch++)
       {
@@ -757,7 +780,7 @@ renderCUDA(
           dL_dcolor.z = weight * dL_dchannel;
       }
       float3 dL_dnorm_uv;
-      cube_texture_fetch_backward(norm_uv, texture, TR, dL_dcolor, dL_dnorm_uv, dL_dtexture);
+      cube_texture_fetch_backward(norm_uv, texture, pix_dir, TR, D, M, clamped, dL_dcolor, dL_dnorm_uv, dL_dtexture);
       float3 dL_duv = dnormvdv(uv, dL_dnorm_uv);
       atomicAdd(&(dL_duvs[global_id * 3]), dL_duv.x);
       atomicAdd(&(dL_duvs[global_id * 3+1]), dL_duv.y);
@@ -911,6 +934,8 @@ void BACKWARD::render(
   const uint32_t* point_list,
   const int W,
   const int H,
+  const int D, 
+  const int M,
   const int ED,
   const int TR,
   const float* bg_color,
@@ -947,7 +972,7 @@ void BACKWARD::render(
   renderCUDA << <grid, block >> >(
     ranges,
     point_list,
-    W, H, ED, TR,
+    W, H, D, M, ED, TR,
     bg_color,
     campos,
     means2D,

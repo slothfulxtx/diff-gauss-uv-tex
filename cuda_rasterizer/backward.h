@@ -15,6 +15,8 @@ namespace BACKWARD
     const uint32_t* point_list,
     const int W,
     const int H,
+    const int D, 
+    const int M, 
     const int ED,
     const int TR,
     const float* bg_color,
