@@ -22,6 +22,8 @@ namespace CudaRasterizer
       std::function<char* (size_t)> binningBuffer,
       std::function<char* (size_t)> imageBuffer,
       const int P,
+      const int D, 
+      const int M, 
       const int ED,
       const int TR,
       const float* background,
@@ -53,6 +55,8 @@ namespace CudaRasterizer
 
     static void backward(
       const int P,
+      const int D, 
+      const int M, 
       const int R,
       const int ED,
       const int TR,

@@ -28,7 +28,7 @@ class Gaussian3D:
             [1, 0, 1.0],
             [1.0, 1.0, 0],
             [1.0, 1.0, 1.0],
-        ]).reshape(6,1,1,3).repeat(1, 2, 2, 1).float().cuda()
+        ]).reshape(6,1,1,3).repeat(1, 2, 2, 4).float().cuda()
 
         scales = torch.tensor([[0.0, -10.0, 0.0]]).float().cuda()
         rots = torch.tensor([[1.4030, 0.0968, 0.0413, 0.0354]]).float().cuda()
@@ -110,6 +110,7 @@ def render(viewpoint_camera: Camera, gaussians: Gaussian3D, bg_color, scaling_mo
         scale_modifier=scaling_modifier,
         viewmatrix=viewpoint_camera.world_view_transform,
         projmatrix=viewpoint_camera.full_proj_transform,
+        sh_degree=1,
         campos=viewpoint_camera.camera_center,
         prefiltered=False,
         debug=debug

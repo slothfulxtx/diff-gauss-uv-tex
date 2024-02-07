@@ -24,6 +24,7 @@ RasterizeGaussiansCUDA(
   const float tan_fovy,
   const int image_height,
   const int image_width,
+  const int degree,
   const torch::Tensor& campos,
   const bool prefiltered,
   const bool debug);
@@ -50,6 +51,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
   const torch::Tensor& dL_dout_norm,
   const torch::Tensor& dL_dout_alpha,
   const torch::Tensor& dL_dout_extra,
+  const int degree,
   const torch::Tensor& campos,
   const torch::Tensor& geomBuffer,
   const int R,

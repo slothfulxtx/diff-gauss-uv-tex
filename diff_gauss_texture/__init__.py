@@ -60,8 +60,11 @@ class _RasterizeGaussians(torch.autograd.Function):
         assert uvs.shape == (num_gaussians, 3)
         assert gradient_uvs.shape == (num_gaussians, 3*3)
         tex_res = texture.shape[1]
-        assert texture.shape == (6, tex_res, tex_res, 3)
-        
+        max_sh_degree = int(math.sqrt(texture.shape[3] / 3) - 1)
+        assert texture.shape == (6, tex_res, tex_res, (max_sh_degree+1) ** 2 * 3)
+        assert max_sh_degree <= 3
+        assert 0 <= raster_settings.sh_degree and raster_settings.sh_degree <= max_sh_degree
+
         # restrict the length of extra attr values to avoid dynamically sized shared memory allocation
         assert extra_attrs.shape[0] == 0 or extra_attrs.shape[1] <= 34
         # Restructure arguments the way that the C++ lib expects them
@@ -84,6 +87,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             raster_settings.tanfovy,
             raster_settings.image_height,
             raster_settings.image_width,
+            raster_settings.sh_degree,
             raster_settings.campos,
             raster_settings.prefiltered,
             raster_settings.debug
@@ -136,6 +140,7 @@ class _RasterizeGaussians(torch.autograd.Function):
                 grad_out_norm,
                 grad_out_alpha,
                 grad_out_extra,
+                raster_settings.sh_degree, 
                 raster_settings.campos,
                 geomBuffer,
                 num_rendered,
@@ -180,6 +185,7 @@ class GaussianRasterizationSettings(NamedTuple):
     scale_modifier : float
     viewmatrix : torch.Tensor
     projmatrix : torch.Tensor
+    sh_degree : int
     campos : torch.Tensor
     prefiltered : bool
     debug : bool

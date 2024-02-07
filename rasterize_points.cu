@@ -41,6 +41,7 @@ RasterizeGaussiansCUDA(
   const float tan_fovy,
   const int image_height,
   const int image_width,
+  const int degree,
   const torch::Tensor& campos,
   const bool prefiltered,
   const bool debug)
@@ -54,6 +55,7 @@ RasterizeGaussiansCUDA(
   const int W = image_width;
   const int TR = texture.size(1);
   const int F = attr_degree;
+  const int M = int(sqrt(texture.size(3) / 3));
 
   auto int_opts = means3D.options().dtype(torch::kInt32);
   auto float_opts = means3D.options().dtype(torch::kFloat32);
@@ -86,7 +88,7 @@ RasterizeGaussiansCUDA(
       geomFunc,
       binningFunc,
       imgFunc,
-      P, F, TR,
+      P, degree, M, F, TR,
       background.contiguous().data<float>(),
       W, H,
       means3D.contiguous().data<float>(),
@@ -138,6 +140,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
   const torch::Tensor& dL_dout_norm,
   const torch::Tensor& dL_dout_alpha,
   const torch::Tensor& dL_dout_extra,
+  const int degree,
   const torch::Tensor& campos,
   const torch::Tensor& geomBuffer,
   const int R,
@@ -151,6 +154,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
   const int W = dL_dout_color.size(2);
   const int F = (extra_attrs.size(0) != 0 ? extra_attrs.size(1) : 0);
   const int TR = texture.size(1);
+  const int M = int(sqrt(texture.size(3) / 3));
 
   torch::Tensor dL_dmeans3D = torch::zeros({P, 3}, means3D.options());
   torch::Tensor dL_dmeans2D = torch::zeros({P, 3}, means3D.options());
@@ -161,7 +165,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
   torch::Tensor dL_dcov3D = torch::zeros({P, 6}, means3D.options());
   torch::Tensor dL_dnorm3D = torch::zeros({P, 3}, means3D.options());
   torch::Tensor dL_duvs = torch::zeros({P, 3}, means3D.options());
-  torch::Tensor dL_dtexture = torch::zeros({6, TR, TR, 3}, means3D.options());
+  torch::Tensor dL_dtexture = torch::zeros({6, TR, TR, M*M*3}, means3D.options());
   torch::Tensor dL_dscales = torch::zeros({P, 3}, means3D.options());
   torch::Tensor dL_drotations = torch::zeros({P, 4}, means3D.options());
   torch::Tensor dL_dextra_attrs;
@@ -172,7 +176,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
   if(P != 0)
   {  
     CudaRasterizer::Rasterizer::backward(
-      P, R, F, TR,
+      P, degree, M, R, F, TR,
       background.contiguous().data<float>(),
       W, H, 
       means3D.contiguous().data<float>(),
