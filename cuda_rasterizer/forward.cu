@@ -243,7 +243,8 @@ renderCUDA(
   const float4* __restrict__ conic_opacity,
   const float tan_fovx,
   const float tan_fovy,
-  const glm::mat4x4* viewmatrix,
+  const float* viewmatrix,
+  const float* viewmatrix_inv,
   float* __restrict__ out_alpha,
   uint32_t* __restrict__ n_contrib,
   const float* __restrict__ bg_color,
@@ -262,14 +263,7 @@ renderCUDA(
   uint32_t pix_id = W * pix.y + pix.x;
   float2 pixf = { (float)pix.x, (float)pix.y };
   float3 pix_dir = {pix2Ndc(pix.x, W) * tan_fovx, pix2Ndc(pix.y, H) * tan_fovy, 1.0};
-  glm::mat4x4 viewmatrix_inv = glm::inverse(*viewmatrix);
-  float viewmatrix_inv_arr[16] = {
-    viewmatrix_inv[0][0], viewmatrix_inv[0][1], viewmatrix_inv[0][2], viewmatrix_inv[0][3],
-    viewmatrix_inv[1][0], viewmatrix_inv[1][1], viewmatrix_inv[1][2], viewmatrix_inv[1][3],
-    viewmatrix_inv[2][0], viewmatrix_inv[2][1], viewmatrix_inv[2][2], viewmatrix_inv[2][3],
-    viewmatrix_inv[3][0], viewmatrix_inv[3][1], viewmatrix_inv[3][2], viewmatrix_inv[3][3] 
-  };
-  pix_dir = transformVec4x3(pix_dir, viewmatrix_inv_arr);
+  pix_dir = transformVec4x3(pix_dir, viewmatrix_inv);
   float3 cam_p = {cam_pos->x, cam_pos->y, cam_pos->z};
   // Check if this thread is associated with a valid pixel or outside.
   bool inside = pix.x < W&& pix.y < H;
@@ -425,7 +419,8 @@ void FORWARD::render(
   const float4* conic_opacity,
   const float tan_fovx,
   const float tan_fovy,
-  const glm::mat4x4* viewmatrix,
+  const float* viewmatrix,
+  const float* viewmatrix_inv,
   float* out_alpha,
   uint32_t* n_contrib,
   const float* bg_color,
@@ -451,6 +446,7 @@ void FORWARD::render(
     tan_fovx,
     tan_fovy,
     viewmatrix,
+    viewmatrix_inv,
     out_alpha,
     n_contrib,
     bg_color,
