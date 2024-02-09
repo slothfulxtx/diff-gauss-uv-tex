@@ -148,6 +148,7 @@ CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& ch
   obtain(chunk, geom.means2D, P, 128);
   obtain(chunk, geom.cov3D, P * 6, 128);
   obtain(chunk, geom.conic_opacity, P, 128);
+  obtain(chunk, geom.rgb, P, 128);
   obtain(chunk, geom.norm3D, P * 3, 128);
   obtain(chunk, geom.tiles_touched, P, 128);
   cub::DeviceScan::InclusiveSum(nullptr, geom.scan_size, geom.tiles_touched, geom.tiles_touched, P);
@@ -194,6 +195,7 @@ int CudaRasterizer::Rasterizer::forward(
   const int width,
   const int height,
   const float* means3D,
+  const float* shs,
   const float* opacities,
   const float* scales,
   const float scale_modifier,
@@ -234,8 +236,9 @@ int CudaRasterizer::Rasterizer::forward(
 
   // Run preprocessing per-Gaussian (transformation, bounding, conversion of SHs to RGB)
   CHECK_CUDA(FORWARD::preprocess(
-    P,
+    P, D, M,
     means3D,
+    shs,
     (glm::vec3*)scales,
     scale_modifier,
     (glm::vec4*)rotations,
@@ -247,6 +250,7 @@ int CudaRasterizer::Rasterizer::forward(
     tan_fovx, tan_fovy,
     radii,
     geomState.means2D,
+    geomState.rgb,
     geomState.depths,
     geomState.cov3D,
     geomState.norm3D,
@@ -306,9 +310,10 @@ int CudaRasterizer::Rasterizer::forward(
     tile_grid, block,
     imgState.ranges,
     binningState.point_list,
-    width, height, D, M, ED, TR,
+    width, height, ED, TR,
     geomState.means2D,
     means3D,
+    geomState.rgb,
     geomState.norm3D,
     geomState.depths,
     uvs,
@@ -344,6 +349,7 @@ void CudaRasterizer::Rasterizer::backward(
   const int width,
   const int height,
   const float* means3D,
+  const float* shs,
   const float* scales,
   const float scale_modifier,
   const float* rotations,
@@ -376,6 +382,8 @@ void CudaRasterizer::Rasterizer::backward(
   float* dL_dnorm3D,
   float* dL_dscale,
   float* dL_drot,
+  float* dL_drgbs,
+  float* dL_dshs,
   float* dL_duvs,
   float* dL_dtexture,
   float* dL_dextra,
@@ -399,11 +407,12 @@ void CudaRasterizer::Rasterizer::backward(
     block,
     imgState.ranges,
     binningState.point_list,
-    width, height, D, M, ED, TR,
+    width, height, ED, TR,
     background,
     (glm::vec3*)campos,
     geomState.means2D,
     (float3*)means3D,
+    geomState.rgb,
     geomState.conic_opacity,
     tan_fovx, tan_fovy,
     viewmatrix,
@@ -424,6 +433,7 @@ void CudaRasterizer::Rasterizer::backward(
     (float3*)dL_dmean2D,
     (float4*)dL_dconic,
     dL_dopacity,
+    (float3*)dL_drgbs,
     dL_duvs,
     dL_dtexture,
     dL_ddepth,
@@ -434,9 +444,10 @@ void CudaRasterizer::Rasterizer::backward(
   // given to us or a scales/rot pair? If precomputed, pass that. If not,
   // use the one we computed ourselves.
   CHECK_CUDA(BACKWARD::preprocess(
-    P,
+    P, D, M,
     (float3*)means3D,
     radii,
+    shs,
     (glm::vec3*)scales,
     (glm::vec4*)rotations,
     scale_modifier,
@@ -448,8 +459,10 @@ void CudaRasterizer::Rasterizer::backward(
     tan_fovx, tan_fovy,
     (glm::vec3*)campos,
     (float3*)dL_dmean2D,
+    (float3*)dL_drgbs,
     dL_dconic,
     (glm::vec3*)dL_dmean3D,
+    dL_dshs,
     dL_ddepth,
     dL_dcov3D,
     (glm::vec3*)dL_dnorm3D,

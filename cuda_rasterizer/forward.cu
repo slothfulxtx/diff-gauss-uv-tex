@@ -4,6 +4,55 @@
 #include <cooperative_groups/reduce.h>
 namespace cg = cooperative_groups;
 
+
+// Forward method for converting the input spherical harmonics
+// coefficients of each Gaussian to a simple RGB color.
+__device__ float3 computeSpecularColorFromSH(int idx, int deg, int max_coeffs, const glm::vec3* means, glm::vec3 campos, const float* shs)
+{
+  // The implementation is loosely based on code for 
+  // "Differentiable Point-Based Radiance Fields for 
+  // Efficient View Synthesis" by Zhang et al. (2022)
+  glm::vec3 pos = means[idx];
+  glm::vec3 dir = pos - campos;
+  dir = dir / glm::length(dir);
+
+  glm::vec3* sh = ((glm::vec3*)shs) + idx * max_coeffs;
+  glm::vec3 result(0.0, 0.0, 0.0);
+
+  if (deg > 0)
+  {
+    float x = dir.x;
+    float y = dir.y;
+    float z = dir.z;
+    result = result - SH_C1 * y * sh[0] + SH_C1 * z * sh[1] - SH_C1 * x * sh[2];
+
+    if (deg > 1)
+    {
+      float xx = x * x, yy = y * y, zz = z * z;
+      float xy = x * y, yz = y * z, xz = x * z;
+      result = result +
+        SH_C2[0] * xy * sh[3] +
+        SH_C2[1] * yz * sh[4] +
+        SH_C2[2] * (2.0f * zz - xx - yy) * sh[5] +
+        SH_C2[3] * xz * sh[6] +
+        SH_C2[4] * (xx - yy) * sh[7];
+
+      if (deg > 2)
+      {
+        result = result +
+          SH_C3[0] * y * (3.0f * xx - yy) * sh[8] +
+          SH_C3[1] * xy * z * sh[9] +
+          SH_C3[2] * y * (4.0f * zz - xx - yy) * sh[10] +
+          SH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * sh[11] +
+          SH_C3[4] * x * (4.0f * zz - xx - yy) * sh[12] +
+          SH_C3[5] * z * (xx - yy) * sh[13] +
+          SH_C3[6] * x * (xx - 3.0f * yy) * sh[14];
+      }
+    }
+  }
+  return make_float3(result.x, result.y, result.z);
+}
+
 // Forward version of 2D covariance matrix computation
 __device__ float3 computeCov2D(const float3& mean, float focal_x, float focal_y, float tan_fovx, float tan_fovy, const float* cov3D, const float* viewmatrix)
 {
@@ -136,7 +185,10 @@ __device__ void computeNorm3D(const glm::vec3 scale, float mod, const glm::vec4 
 // Perform initial steps for each Gaussian prior to rasterization.
 __global__ void preprocessCUDA(
   const int P,
+  const int D,
+  const int M,
   const float* orig_points,
+  const float* shs,
   const glm::vec3* scales,
   const float scale_modifier,
   const glm::vec4* rotations,
@@ -152,6 +204,7 @@ __global__ void preprocessCUDA(
   const float tan_fovy,
   int* radii,
   float2* points_xy_image,
+  float3* rgbs,
   float* depths,
   float* cov3Ds,
   float* norm3Ds,
@@ -212,6 +265,10 @@ __global__ void preprocessCUDA(
   if ((rect_max.x - rect_min.x) * (rect_max.y - rect_min.y) == 0)
     return;
 
+  if (D > 0)
+  {
+    rgbs[idx] = computeSpecularColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs);
+  }
   // Store some useful helper data for the next steps.
   depths[idx] = p_view.z;
   radii[idx] = my_radius;
@@ -230,12 +287,11 @@ renderCUDA(
   const uint32_t* __restrict__ point_list,
   const int W, 
   const int H,
-  const int D,
-  const int M,
   const int ED,
   const int TR,
   const float2* __restrict__ points_xy_image,
   const float* __restrict__ orig_points,
+  const float3* __restrict__ rgbs,
   const float* __restrict__ norms,
   const float* __restrict__ depths,
   const float* __restrict__ uvs,
@@ -365,7 +421,7 @@ renderCUDA(
       else
         uv = {uv.x / denom, uv.y / denom, uv.z / denom};
       
-      float3 color = cube_texture_fetch(uv, texture, pix_dir, TR, D, M);
+      float3 color = cube_texture_fetch(uv, texture, TR, rgbs[g_idx]);
 
       // Eq. (3) from 3D Gaussian splatting paper.
       C[0] += color.x * alpha * T;
@@ -408,12 +464,11 @@ void FORWARD::render(
   const uint32_t* point_list,
   const int W,
   const int H,
-  const int D,
-  const int M,
   const int ED,
   const int TR,
   const float2* means2D,
   const float* means3D,
+  const float3* rgbs,
   const float* norms,
   const float* depths,
   const float* uvs,
@@ -437,9 +492,10 @@ void FORWARD::render(
   renderCUDA << <grid, block >> > (
     ranges,
     point_list,
-    W, H, D, M, ED, TR,
+    W, H, ED, TR,
     means2D,
     means3D,
+    rgbs,
     norms,
     depths,
     uvs,
@@ -463,7 +519,10 @@ void FORWARD::render(
 
 void FORWARD::preprocess(
   const int P,
+  const int D,
+  const int M,
   const float* means3D,
+  const float* shs,
   const glm::vec3* scales,
   const float scale_modifier,
   const glm::vec4* rotations,
@@ -478,6 +537,7 @@ void FORWARD::preprocess(
   const float tan_fovy,
   int* radii,
   float2* means2D,
+  float3* rgbs,
   float* depths,
   float* cov3Ds,
   float* norm3Ds,
@@ -487,8 +547,9 @@ void FORWARD::preprocess(
   bool prefiltered)
 {
   preprocessCUDA << <(P + 255) / 256, 256 >> > (
-    P,
+    P, D, M,
     means3D,
+    shs,
     scales,
     scale_modifier,
     rotations,
@@ -501,6 +562,7 @@ void FORWARD::preprocess(
     tan_fovx, tan_fovy,
     radii,
     means2D,
+    rgbs,
     depths,
     cov3Ds,
     norm3Ds,

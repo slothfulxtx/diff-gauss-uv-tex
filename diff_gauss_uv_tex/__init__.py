@@ -11,18 +11,20 @@ def cpu_deep_copy_tuple(input_tuple):
 def rasterize_gaussians(
     means3D,
     means2D,
+    shs, # view-dependent color, sh[1~15]
     opacities,
     scales,
     rotations,
     uvs,
     gradient_uvs, # duv/dxy
-    texture,
+    texture, # view-independent color, sh[0]
     extra_attrs,
     raster_settings,
 ):
     color, depth, norm, alpha, radii, extra = _RasterizeGaussians.apply(
         means3D,
         means2D,
+        shs,
         opacities,
         scales,
         rotations,
@@ -43,6 +45,7 @@ class _RasterizeGaussians(torch.autograd.Function):
         ctx,
         means3D,
         means2D,
+        shs,
         opacities,
         scales,
         rotations,
@@ -54,14 +57,18 @@ class _RasterizeGaussians(torch.autograd.Function):
     ):
         num_gaussians = means3D.shape[0]
         assert means3D.shape == (num_gaussians, 3)
+        if shs.shape[0] > 0:
+            max_sh_degree = int(math.sqrt(shs.shape[1] + 1) - 1)
+            assert shs.shape == (num_gaussians, (max_sh_degree+1) ** 2 - 1, 3)
+        else:
+            max_sh_degree = 0
         assert opacities.shape == (num_gaussians, 1)
         assert scales.shape == (num_gaussians, 3)
         assert rotations.shape == (num_gaussians, 4)
         assert uvs.shape == (num_gaussians, 3)
         assert gradient_uvs.shape == (num_gaussians, 3*3)
         tex_res = texture.shape[1]
-        max_sh_degree = int(math.sqrt(texture.shape[3] / 3) - 1)
-        assert texture.shape == (6, tex_res, tex_res, (max_sh_degree+1) ** 2 * 3)
+        assert texture.shape == (6, tex_res, tex_res, 3)
         assert max_sh_degree <= 3
         assert 0 <= raster_settings.sh_degree and raster_settings.sh_degree <= max_sh_degree
 
@@ -71,6 +78,7 @@ class _RasterizeGaussians(torch.autograd.Function):
         args = (
             raster_settings.bg, 
             means3D,
+            shs,
             opacities,
             scales,
             rotations,
@@ -108,7 +116,7 @@ class _RasterizeGaussians(torch.autograd.Function):
         # Keep relevant tensors for backward
         ctx.raster_settings = raster_settings
         ctx.num_rendered = num_rendered
-        ctx.save_for_backward(means3D, scales, rotations, uvs, gradient_uvs, texture, radii, extra_attrs, geomBuffer, binningBuffer, imgBuffer, alpha)
+        ctx.save_for_backward(means3D, shs, scales, rotations, uvs, gradient_uvs, texture, radii, extra_attrs, geomBuffer, binningBuffer, imgBuffer, alpha)
         return color, depth, norm, alpha, radii, extra
 
     @staticmethod
@@ -117,12 +125,13 @@ class _RasterizeGaussians(torch.autograd.Function):
         # Restore necessary values from context
         num_rendered = ctx.num_rendered
         raster_settings = ctx.raster_settings
-        means3D, scales, rotations, uvs, gradient_uvs, texture, radii, extra_attrs, geomBuffer, binningBuffer, imgBuffer, alpha = ctx.saved_tensors
+        means3D, shs, scales, rotations, uvs, gradient_uvs, texture, radii, extra_attrs, geomBuffer, binningBuffer, imgBuffer, alpha = ctx.saved_tensors
 
         # Restructure args as C++ method expects them
         args = (raster_settings.bg,
                 means3D, 
                 radii, 
+                shs,
                 scales, 
                 rotations, 
                 extra_attrs,
@@ -153,17 +162,18 @@ class _RasterizeGaussians(torch.autograd.Function):
         if raster_settings.debug:
             cpu_args = cpu_deep_copy_tuple(args) # Copy them before they can be corrupted
             try:
-                grad_means2D, grad_opacities, grad_means3D, grad_scales, grad_rotations, grad_uvs, grad_texture, grad_extra_attrs = _C.rasterize_gaussians_backward(*args)
+                grad_means2D, grad_opacities, grad_means3D, grad_shs, grad_scales, grad_rotations, grad_uvs, grad_texture, grad_extra_attrs = _C.rasterize_gaussians_backward(*args)
             except Exception as ex:
                 torch.save(cpu_args, "snapshot_bw.dump")
                 print("\nAn error occured in backward. Writing snapshot_bw.dump for debugging.\n")
                 raise ex
         else:
-            grad_means2D, grad_opacities, grad_means3D, grad_scales, grad_rotations, grad_uvs, grad_texture, grad_extra_attrs = _C.rasterize_gaussians_backward(*args)
+            grad_means2D, grad_opacities, grad_means3D, grad_shs, grad_scales, grad_rotations, grad_uvs, grad_texture, grad_extra_attrs = _C.rasterize_gaussians_backward(*args)
 
         grads = (
             grad_means3D,
             grad_means2D,
+            grad_shs,
             grad_opacities,
             grad_scales,
             grad_rotations,
@@ -206,16 +216,20 @@ class GaussianRasterizer(nn.Module):
             
         return visible
 
-    def forward(self, means3D, means2D, opacities, scales, rotations, uvs, gradient_uvs, texture, extra_attrs=None):
+    def forward(self, means3D, means2D, opacities, scales, rotations, uvs, gradient_uvs, texture, shs=None, extra_attrs=None):
         
         raster_settings = self.raster_settings
         
+        if shs is None:
+            shs = torch.Tensor([])
         if extra_attrs is None:
             extra_attrs = torch.Tensor([])
+        
         # Invoke C++/CUDA rasterization routine
         return rasterize_gaussians(
             means3D,
             means2D,
+            shs,
             opacities,
             scales, 
             rotations,
