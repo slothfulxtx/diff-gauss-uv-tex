@@ -266,9 +266,9 @@ __global__ void preprocessCUDA(
     return;
 
   if (D > 0)
-  {
     rgbs[idx] = computeSpecularColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs);
-  }
+  else
+    rgbs[idx] = make_float3(0.0, 0.0, 0.0);
   // Store some useful helper data for the next steps.
   depths[idx] = p_view.z;
   radii[idx] = my_radius;
