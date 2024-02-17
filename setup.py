@@ -6,7 +6,7 @@ os.path.dirname(os.path.abspath(__file__))
 setup(
     name="diff_gauss_uv_tex",
     packages=['diff_gauss_uv_tex'],
-    version="0.1.0",
+    version="0.2.0",
     ext_modules=[
         CUDAExtension(
             name="diff_gauss_uv_tex._C",

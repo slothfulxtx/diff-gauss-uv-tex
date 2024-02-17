@@ -145,6 +145,7 @@ CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& ch
 {
   GeometryState geom;
   obtain(chunk, geom.depths, P, 128);
+  obtain(chunk, geom.clamp_radii, P, 128);
   obtain(chunk, geom.means2D, P, 128);
   obtain(chunk, geom.cov3D, P * 6, 128);
   obtain(chunk, geom.conic_opacity, P, 128);
@@ -252,6 +253,7 @@ int CudaRasterizer::Rasterizer::forward(
     geomState.means2D,
     geomState.rgb,
     geomState.depths,
+    geomState.clamp_radii,
     geomState.cov3D,
     geomState.norm3D,
     geomState.conic_opacity,
@@ -316,6 +318,7 @@ int CudaRasterizer::Rasterizer::forward(
     geomState.rgb,
     geomState.norm3D,
     geomState.depths,
+    geomState.clamp_radii,
     uvs,
     gradient_uvs,
     texture,
@@ -418,6 +421,7 @@ void CudaRasterizer::Rasterizer::backward(
     viewmatrix,
     viewmatrix_inv,
     geomState.depths,
+    geomState.clamp_radii,
     geomState.norm3D,
     uvs,
     gradient_uvs,

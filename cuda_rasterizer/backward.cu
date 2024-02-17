@@ -609,6 +609,7 @@ renderCUDA(
   const float* viewmatrix,
   const float* viewmatrix_inv,
   const float* __restrict__ depths,
+  const float* __restrict__ clamp_radii,
   const float* __restrict__ norms,
   const float* __restrict__ uvs,
   const float* __restrict__ gradient_uvs,
@@ -762,9 +763,13 @@ renderCUDA(
       float denom = pix_dir.x * norm.x + pix_dir.y * norm.y + pix_dir.z * norm.z;
       float t;
       float3 delta_xyz;
+      float clamp_radius = clamp_radii[global_id], delta_norm;
       if(fabs(denom) > 1e-6){
         t = -bias / denom;
         delta_xyz = {cam_p.x + t*pix_dir.x - orig_point.x, cam_p.y + t*pix_dir.y  - orig_point.y, cam_p.z + t*pix_dir.z - orig_point.z};
+        delta_norm = sqrt(delta_xyz.x * delta_xyz.x + delta_xyz.y * delta_xyz.y + delta_xyz.z * delta_xyz.z);
+        if(delta_norm > clamp_radius)
+          delta_xyz = make_float3(delta_xyz.x / delta_norm * clamp_radius, delta_xyz.y / delta_norm * clamp_radius, delta_xyz.z / delta_norm * clamp_radius);
       }else{
         delta_xyz = {0, 0, 0};
       }
@@ -977,6 +982,7 @@ void BACKWARD::render(
   const float* viewmatrix,
   const float* viewmatrix_inv,
   const float* depths,
+  const float* clamp_radii,
   const float* norms,
   const float* uvs,
   const float* gradient_uvs,
@@ -1013,6 +1019,7 @@ void BACKWARD::render(
     viewmatrix,
     viewmatrix_inv,
     depths,
+    clamp_radii,
     norms,
     uvs,
     gradient_uvs,

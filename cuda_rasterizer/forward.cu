@@ -206,6 +206,7 @@ __global__ void preprocessCUDA(
   float2* points_xy_image,
   float3* rgbs,
   float* depths,
+  float* clamp_radii,
   float* cov3Ds,
   float* norm3Ds,
   float4* conic_opacity,
@@ -271,6 +272,7 @@ __global__ void preprocessCUDA(
     rgbs[idx] = make_float3(0.0, 0.0, 0.0);
   // Store some useful helper data for the next steps.
   depths[idx] = p_view.z;
+  clamp_radii[idx] = max(max(scales[idx].x, scales[idx].y), scales[idx].z) * 3;
   radii[idx] = my_radius;
   points_xy_image[idx] = point_image;
   // Inverse 2D covariance and opacity neatly pack into one float4
@@ -294,6 +296,7 @@ renderCUDA(
   const float3* __restrict__ rgbs,
   const float* __restrict__ norms,
   const float* __restrict__ depths,
+  const float* __restrict__ clamp_radii,
   const float* __restrict__ uvs,
   const float* __restrict__ gradient_uvs,
   const float* __restrict__ texture,
@@ -407,9 +410,13 @@ renderCUDA(
       float denom = pix_dir.x * norm.x + pix_dir.y * norm.y + pix_dir.z * norm.z;
       float t;
       float3 delta_xyz;
+      float clamp_radius = clamp_radii[g_idx], delta_norm;
       if(fabs(denom) > 1e-6) {
         t = -bias / denom;
         delta_xyz = {cam_p.x + t*pix_dir.x - orig_point.x, cam_p.y + t*pix_dir.y  - orig_point.y, cam_p.z + t*pix_dir.z - orig_point.z};
+        delta_norm = sqrt(delta_xyz.x * delta_xyz.x + delta_xyz.y * delta_xyz.y + delta_xyz.z * delta_xyz.z);
+        if(delta_norm > clamp_radius)
+          delta_xyz = make_float3(delta_xyz.x / delta_norm * clamp_radius, delta_xyz.y / delta_norm * clamp_radius, delta_xyz.z / delta_norm * clamp_radius);
       }else{
         delta_xyz = {0, 0, 0};
       }
@@ -471,6 +478,7 @@ void FORWARD::render(
   const float3* rgbs,
   const float* norms,
   const float* depths,
+  const float* clamp_radii,
   const float* uvs,
   const float* gradient_uvs,
   const float* texture,
@@ -498,6 +506,7 @@ void FORWARD::render(
     rgbs,
     norms,
     depths,
+    clamp_radii,
     uvs,
     gradient_uvs,
     texture,
@@ -539,6 +548,7 @@ void FORWARD::preprocess(
   float2* means2D,
   float3* rgbs,
   float* depths,
+  float* clamp_radii,
   float* cov3Ds,
   float* norm3Ds,
   float4* conic_opacity,
@@ -564,6 +574,7 @@ void FORWARD::preprocess(
     means2D,
     rgbs,
     depths,
+    clamp_radii,
     cov3Ds,
     norm3Ds,
     conic_opacity,

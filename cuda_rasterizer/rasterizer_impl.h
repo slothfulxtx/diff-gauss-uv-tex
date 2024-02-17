@@ -19,6 +19,7 @@ namespace CudaRasterizer
   {
     size_t scan_size;
     float* depths;
+    float* clamp_radii;
     char* scanning_space;
     float2* means2D;
     float* cov3D;

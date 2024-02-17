@@ -28,6 +28,7 @@ namespace BACKWARD
     const float* viewmatrix,
     const float* viewmatrix_inv,
     const float* depths,
+    const float* clamp_radii,
     const float* norms,
     const float* uvs,
     const float* gradient_uvs,
